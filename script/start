@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+root="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." >/dev/null 2>&1 && pwd )"
+source "$root/script/helpers/check-prereqs"
+
+force=false
+while [[ $# -gt 0 ]]; do
+  key="$1"
+  shift
+
+  case "$key" in
+    -f|--force)
+      force=true
+      ;;
+  esac
+done
+
+if $force; then
+  docker container rm -f informer-mysqld
+  docker network rm -f informer-net
+  docker volume rm -f informer-mysql-data
+fi
+
+if $force; then
+  docker-compose down
+fi
+
+docker-compose up -d
