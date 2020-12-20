@@ -1,5 +1,6 @@
-use crate::error::Error;
-use crate::packet::PacketReader;
+use std::todo;
+
+use crate::{error::Error, packet::Packet};
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
@@ -18,10 +19,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         }
     }
 
-    pub async fn read_packet<R: PacketReader>(&mut self) -> Result<Option<R::Packet>, Error> {
+    pub async fn read_packet<P: Packet>(&mut self) -> Result<Option<P>, Error> {
         loop {
             // Attempt to parse from the buffer
-            if let Some(packet) = self.parse_packet::<R>()? {
+            if let Some(packet) = self.parse_packet::<P>()? {
                 return Ok(Some(packet));
             }
 
@@ -38,10 +39,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         }
     }
 
-    fn parse_packet<R: PacketReader>(&mut self) -> Result<Option<R::Packet>, Error> {
+    pub async fn write_packet<P: Packet>(&mut self, packet: P) -> Result<(), Error> {
+        todo!()
+    }
+
+    fn parse_packet<P: Packet>(&mut self) -> Result<Option<P>, Error> {
         let mut buf = std::io::Cursor::new(&self.buffer[..]);
 
-        match R::try_read(&mut buf) {
+        match P::try_read(&mut buf) {
             Ok(packet) => {
                 let len = buf.position() as usize;
                 self.buffer.advance(len);
@@ -60,16 +65,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 mod tests {
     use std::io::Cursor;
 
-    use crate::{error::Error, packet::Raw};
+    use bytes::Bytes;
+
+    use crate::error::Error;
     use super::Connection;
 
     #[tokio::test]
     pub async fn read_packet_reads_next_packet() {
         let data = vec![4u8, 0, 0, 0, 1, 2, 3, 4, 4u8, 0, 0, 0, 5, 6, 7, 8];
         let mut conn = Connection::new(Cursor::new(data));
-        let packet = conn.read_packet::<Raw>().await.unwrap().unwrap();
+        let packet = conn.read_packet::<Bytes>().await.unwrap().unwrap();
         assert_eq!(&[1, 2, 3, 4], packet.as_ref());
-        let packet = conn.read_packet::<Raw>().await.unwrap().unwrap();
+        let packet = conn.read_packet::<Bytes>().await.unwrap().unwrap();
         assert_eq!(&[5, 6, 7, 8], packet.as_ref());
     }
 
@@ -77,14 +84,14 @@ mod tests {
     pub async fn read_packet_returns_none_if_no_more_data_and_no_incomplete_packet() {
         let data = vec![4u8, 0, 0, 0, 1, 2, 3, 4];
         let mut conn = Connection::new(Cursor::new(data));
-        assert!(conn.read_packet::<Raw>().await.unwrap().is_some());
-        assert!(conn.read_packet::<Raw>().await.unwrap().is_none());
+        assert!(conn.read_packet::<Bytes>().await.unwrap().is_some());
+        assert!(conn.read_packet::<Bytes>().await.unwrap().is_none());
     }
 
     #[tokio::test]
     pub async fn read_packet_returns_connection_reset_if_no_more_data_and_incomplete_packet() {
         let data = vec![4u8, 0];
         let mut conn = Connection::new(Cursor::new(data));
-        assert_eq!(Error::ConnectionReset, conn.read_packet::<Raw>().await.unwrap_err())
+        assert_eq!(Error::ConnectionReset, conn.read_packet::<Bytes>().await.unwrap_err())
     }
 }

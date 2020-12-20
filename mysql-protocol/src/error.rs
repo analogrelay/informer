@@ -5,6 +5,7 @@ pub enum Error {
   ConnectionReset,
   DataIncomplete,
   InvalidPacket(Cow<'static, str>),
+  NotSupported(Cow<'static, str>),
   Other(Box<dyn std::error::Error>)
 }
 
@@ -17,6 +18,7 @@ impl std::fmt::Display for Error {
             Error::ConnectionReset => write!(f, "connection reset by peer"),
             Error::DataIncomplete => write!(f, "insufficient data received"),
             Error::InvalidPacket(s) => write!(f, "invalid packet: {}", s),
+            Error::NotSupported(s) => write!(f, "not supported: {}", s),
             Error::Other(e) => write!(f, "{}", e)
         }
     }
@@ -28,6 +30,7 @@ impl std::cmp::PartialEq for Error {
       (Error::ConnectionReset, Error::ConnectionReset) => true,
       (Error::DataIncomplete, Error::DataIncomplete) => true,
       (Error::InvalidPacket(s1), Error::InvalidPacket(s2)) => s1 == s2,
+      (Error::NotSupported(s1), Error::NotSupported(s2)) => s1 == s2,
 
       // Notable: Error::Other never equals Error::Other
       (_, _) => false,
