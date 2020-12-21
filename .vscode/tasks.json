@@ -3,7 +3,8 @@
 	"tasks": [
 		{
 			"type": "cargo",
-			"command": "build",
+            "command": "check",
+            "args": [ "--all", "--all-targets"],
 			"problemMatcher": [
 				"$rustc"
 			],

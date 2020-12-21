@@ -1,11 +1,11 @@
-use std::cmp::max;
+use std::{borrow::Cow, cmp::max, i8::MAX, todo};
 
 use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
 use mysql_common::constants::{CapabilityFlags, StatusFlags};
 
-use crate::error::Error;
+use crate::error::{Error, ErrorKind};
 
-use super::{Packet, read_bytes, read_string};
+use super::{Packet, read_bytes, read_string, write_lenenc_int, write_string};
 
 #[derive(Debug)]
 pub struct Handshake {
@@ -53,8 +53,84 @@ impl Packet for Handshake {
         })
     }
 
+    fn write<W: std::io::Write>(&self, _: &mut W) -> Result<(), Error> {
+        Err(Error::new(
+            ErrorKind::NotSupported,
+            "writing handshake packets"))
+    }
+}
+
+pub struct HandshakeResponse {
+    pub capability_flags: CapabilityFlags,
+    pub max_packet_size: u32,
+    pub character_set: u8,
+    pub username: Cow<'static, str>,
+    pub auth_response: Vec<u8>,
+    pub initial_database: Option<Cow<'static, str>>,
+    pub auth_plugin_name: Cow<'static, str>,
+    pub attributes: Vec<(Cow<'static, str>, Cow<'static, str>)>,
+}
+
+impl Packet for HandshakeResponse {
+    fn read<R: std::io::BufRead>(_: &mut R) -> Result<Self, Error> {
+        Err(Error::new(
+            ErrorKind::NotSupported,
+            "reading handshake response packets"))
+    }
+
     fn write<W: std::io::Write>(&self, w: &mut W) -> Result<(), Error> {
-        Err(Error::NotSupported("writing handshake packets is not supported".into()))
+        let cap_flags = if let Some(_) = self.initial_database {
+            self.capability_flags | CapabilityFlags::CLIENT_CONNECT_WITH_DB
+        } else {
+            self.capability_flags
+        };
+
+        w.write_u32::<LE>(cap_flags.bits())?;
+        w.write_u32::<LE>(self.max_packet_size)?;
+        w.write_u8(self.character_set)?;
+        w.write_all(&[0u8; 23])?;
+        write_string(w, self.username.as_ref())?;
+
+        if self.capability_flags.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+            write_lenenc_int(w, self.auth_response.len() as u64)?;
+            w.write_all(&self.auth_response)?;
+        } else if self.capability_flags.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
+            if self.auth_response.len() > u8::MAX as usize {
+                return Err(Error::new(
+                    ErrorKind::InvalidPacket,
+                    format!("cannot encode auth response of length {} unless CLIENT_PLUGIN_AUTHN_LENENC_CLIENT_DATA is set", self.auth_response.len())))
+            }
+            w.write_u8(self.auth_response.len() as u8)?;
+            w.write_all(&self.auth_response)?;
+        } else {
+            w.write_all(&self.auth_response)?;
+            w.write_u8(0)?;
+        }
+
+        if let Some(s) = &self.initial_database {
+            write_string(w, s.as_ref())?;
+        }
+
+        if cap_flags.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH) {
+            write_string(w, self.auth_plugin_name.as_ref())?;
+        }
+
+        if cap_flags.contains(CapabilityFlags::CLIENT_CONNECT_ATTRS) {
+            write_lenenc_int(w, self.attributes.len() as u64)?;
+            for (key, val) in &self.attributes {
+                let key = key.as_bytes();
+                let val = val.as_bytes();
+                write_lenenc_int(w, key.len() as u64)?;
+                w.write_all(key)?;
+                write_lenenc_int(w, val.len() as u64)?;
+                w.write_all(val)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        todo!()
     }
 }
 
@@ -63,7 +139,7 @@ mod tests {
     use std::io::Cursor;
     use mysql_common::constants::{CapabilityFlags, StatusFlags};
     use crate::packet::Packet;
-    use super::Handshake;
+    use super::{Handshake, HandshakeResponse};
 
     const HANDSHAKE_PACKET: [u8; 74] = [
         0x0Au8, 0x38u8, 0x2Eu8, 0x30u8, 0x2Eu8, 0x32u8, 0x32u8, 0x00u8, 0x0Au8, 0x00u8, 0x00u8, 0x00u8, 0x26u8, 0x43u8, 0x30u8,
@@ -93,5 +169,65 @@ mod tests {
         assert_eq!(255, handshake.character_set);
         assert_eq!(StatusFlags::SERVER_STATUS_AUTOCOMMIT, handshake.status_flags);
         assert_eq!("caching_sha2_password", handshake.auth_plugin_name);
+    }
+
+    #[test]
+    pub fn write_handshake_response() {
+        let base_flags = CapabilityFlags::from_bits_truncate(0x81bea205);
+        let expected: Vec<u8> = vec![
+            0x05, 0xa2, 0xbe, 0x81, // client capabilities
+            0x00, 0x00, 0x00, 0x01, // max packet
+            0x2d, // charset
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // reserved
+            b'r', b'o', b'o', b't', 0x00, // username=root
+            0x00, // blank scramble
+            b'm', b'y', b's', b'q', b'l', b'_',
+            b'n', b'a', b't', b'i', b'v', b'e', b'_',
+            b'p', b'a', b's', b's', b'w', b'o', b'r', b'd', 0x00, // auth plugin name
+            0x00,
+        ];
+        assert_eq!(expected, write_to_vec(HandshakeResponse {
+            capability_flags: base_flags,
+            max_packet_size: 0x1000000,
+            character_set: 0x2d,
+            username: "root".into(),
+            auth_response: vec![],
+            auth_plugin_name: "mysql_native_password".into(),
+            attributes: vec![],
+            initial_database: None
+        }));
+
+        // Include a db name but don't set the caps for it -> we set it for you
+        let expected: Vec<u8> = vec![
+            0x0d, 0xa2, 0xbe, 0x81, // client capabilities
+            0x00, 0x00, 0x00, 0x01, // max packet
+            0x2d, // charset
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // reserved
+            b'r', b'o', b'o', b't', 0x00, // username=root
+            0x00, // blank scramble
+            b'm', b'y', b'd', b'b', 0x00, // dbname
+            b'm', b'y', b's', b'q', b'l', b'_',
+            b'n', b'a', b't', b'i', b'v', b'e', b'_',
+            b'p', b'a', b's', b's', b'w', b'o', b'r', b'd', 0x00, // auth plugin name
+            0x00, // no attrs
+        ];
+        assert_eq!(expected, write_to_vec(HandshakeResponse {
+            capability_flags: base_flags,
+            max_packet_size: 0x1000000,
+            character_set: 0x2d,
+            username: "root".into(),
+            auth_response: vec![],
+            auth_plugin_name: "mysql_native_password".into(),
+            attributes: vec![],
+            initial_database: Some("mydb".into()),
+        }));
+    }
+
+    fn write_to_vec<P: Packet>(packet: P) -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        packet.write(&mut v).unwrap();
+        v
     }
 }

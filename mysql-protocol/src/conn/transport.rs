@@ -1,19 +1,25 @@
-use std::todo;
+use std::{fmt::Debug, todo};
 
-use crate::{error::Error, packet::Packet};
+use crate::{error::{Error, ErrorKind}, packet::Packet};
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 const BUFFER_SIZE: usize = 4096;
 
-pub struct Connection<S: AsyncRead + AsyncWrite + Unpin> {
+pub struct Transport<S: AsyncRead + AsyncWrite + Unpin> {
     stream: S,
     buffer: BytesMut,
 }
 
-impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
-    pub fn new(stream: S) -> Connection<S> {
-        Connection {
+impl<S: AsyncRead + AsyncWrite + Unpin> Debug for Transport<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<<Transport>>")
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> Transport<S> {
+    pub fn new(stream: S) -> Transport<S> {
+        Transport {
             stream,
             buffer: BytesMut::with_capacity(BUFFER_SIZE),
         }
@@ -33,13 +39,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                     return Ok(None);
                 } else {
                     // We were shut down with incomplete packets still in the buffer
-                    return Err(Error::ConnectionReset);
+                    return Err(Error::new(ErrorKind::ConnectionReset, "connection reset by peer"));
                 }
             }
         }
     }
 
-    pub async fn write_packet<P: Packet>(&mut self, packet: P) -> Result<(), Error> {
+    pub async fn write_packet<P: Packet>(&mut self, _packet: P) -> Result<(), Error> {
         todo!()
     }
 
@@ -52,7 +58,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                 self.buffer.advance(len);
                 Ok(Some(packet))
             }
-            Err(Error::DataIncomplete) => {
+            Err(e) if e.kind() == ErrorKind::DataIncomplete => {
                 // Need more data
                 Ok(None)
             }
@@ -67,13 +73,13 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::error::Error;
-    use super::Connection;
+    use crate::error::ErrorKind;
+    use super::Transport;
 
     #[tokio::test]
     pub async fn read_packet_reads_next_packet() {
         let data = vec![4u8, 0, 0, 0, 1, 2, 3, 4, 4u8, 0, 0, 0, 5, 6, 7, 8];
-        let mut conn = Connection::new(Cursor::new(data));
+        let mut conn = Transport::new(Cursor::new(data));
         let packet = conn.read_packet::<Bytes>().await.unwrap().unwrap();
         assert_eq!(&[1, 2, 3, 4], packet.as_ref());
         let packet = conn.read_packet::<Bytes>().await.unwrap().unwrap();
@@ -83,7 +89,7 @@ mod tests {
     #[tokio::test]
     pub async fn read_packet_returns_none_if_no_more_data_and_no_incomplete_packet() {
         let data = vec![4u8, 0, 0, 0, 1, 2, 3, 4];
-        let mut conn = Connection::new(Cursor::new(data));
+        let mut conn = Transport::new(Cursor::new(data));
         assert!(conn.read_packet::<Bytes>().await.unwrap().is_some());
         assert!(conn.read_packet::<Bytes>().await.unwrap().is_none());
     }
@@ -91,7 +97,7 @@ mod tests {
     #[tokio::test]
     pub async fn read_packet_returns_connection_reset_if_no_more_data_and_incomplete_packet() {
         let data = vec![4u8, 0];
-        let mut conn = Connection::new(Cursor::new(data));
-        assert_eq!(Error::ConnectionReset, conn.read_packet::<Bytes>().await.unwrap_err())
+        let mut conn = Transport::new(Cursor::new(data));
+        assert_eq!(ErrorKind::ConnectionReset, conn.read_packet::<Bytes>().await.unwrap_err().kind())
     }
 }

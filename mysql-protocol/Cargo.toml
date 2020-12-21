@@ -1,5 +1,5 @@
 [package]
-name = "mysql-binlog"
+name = "mysql-protocol"
 version = "0.1.0"
 authors = ["Andrew Stanton-Nurse <me@analogrelay.net>"]
 edition = "2018"

@@ -1,45 +1,66 @@
 use std::borrow::Cow;
 
-#[derive(Debug)]
-pub enum Error {
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ErrorKind {
   ConnectionReset,
   DataIncomplete,
-  InvalidPacket(Cow<'static, str>),
-  NotSupported(Cow<'static, str>),
-  Other(Box<dyn std::error::Error>)
+  InvalidPacket,
+  NotSupported,
+  ProtocolError,
+  ServerIncapable,
+  UnsupportedProtocol { required: u8, requested: u8 },
+  Other
+}
+
+#[derive(Debug)]
+pub struct Error {
+    kind: ErrorKind,
+    description: Cow<'static, str>,
+    cause: Option<Box<dyn std::error::Error>>
+}
+
+impl Error {
+    pub fn new<S: Into<Cow<'static, str>>>(kind: ErrorKind, description: S) -> Error {
+        Error { kind, description: description.into(), cause: None }
+    }
+
+    pub fn with_cause<S: Into<Cow<'static, str>>, E: Into<Box<dyn std::error::Error>>>(kind: ErrorKind, description: S, cause: E) -> Error {
+        Error {
+            kind,
+            description: description.into(),
+            cause: Some(cause.into()),
+        }
+    }
+
+    pub fn kind(&self) -> ErrorKind {
+        self.kind
+    }
 }
 
 impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_ref().map(|e| e.as_ref())
+    }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Error::ConnectionReset => write!(f, "connection reset by peer"),
-            Error::DataIncomplete => write!(f, "insufficient data received"),
-            Error::InvalidPacket(s) => write!(f, "invalid packet: {}", s),
-            Error::NotSupported(s) => write!(f, "not supported: {}", s),
-            Error::Other(e) => write!(f, "{}", e)
-        }
+        write!(f, "{:?} ({})", self.kind, self.description.as_ref())
     }
 }
 
 impl std::cmp::PartialEq for Error {
   fn eq(&self, other: &Error) -> bool {
-    match (self, other) {
-      (Error::ConnectionReset, Error::ConnectionReset) => true,
-      (Error::DataIncomplete, Error::DataIncomplete) => true,
-      (Error::InvalidPacket(s1), Error::InvalidPacket(s2)) => s1 == s2,
-      (Error::NotSupported(s1), Error::NotSupported(s2)) => s1 == s2,
-
-      // Notable: Error::Other never equals Error::Other
-      (_, _) => false,
-    }
+      match (self.kind, other.kind) {
+          (ErrorKind::Other, _) => false,
+          (_, ErrorKind::Other) => false,
+          (l, r) => l.eq(&r),
+      }
   }
 }
 
 impl From<std::io::Error> for Error {
   fn from(e: std::io::Error) -> Error {
-    Error::Other(e.into())
+    Error::with_cause(ErrorKind::Other, format!("{}", e), e)
   }
 }
