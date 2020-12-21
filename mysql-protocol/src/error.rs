@@ -8,6 +8,7 @@ pub enum ErrorKind {
   NotSupported,
   ProtocolError,
   ServerIncapable,
+  ClientIncapable,
   UnsupportedProtocol { required: u8, requested: u8 },
   Other
 }

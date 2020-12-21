@@ -64,11 +64,11 @@ pub struct HandshakeResponse {
     pub capability_flags: CapabilityFlags,
     pub max_packet_size: u32,
     pub character_set: u8,
-    pub username: Cow<'static, str>,
+    pub username: String,
     pub auth_response: Vec<u8>,
-    pub initial_database: Option<Cow<'static, str>>,
-    pub auth_plugin_name: Cow<'static, str>,
-    pub attributes: Vec<(Cow<'static, str>, Cow<'static, str>)>,
+    pub initial_database: Option<String>,
+    pub auth_plugin_name: String,
+    pub attributes: Vec<(String, String)>
 }
 
 impl Packet for HandshakeResponse {
@@ -127,10 +127,6 @@ impl Packet for HandshakeResponse {
             }
         }
         Ok(())
-    }
-
-    fn size_hint(&self) -> Option<usize> {
-        todo!()
     }
 }
 

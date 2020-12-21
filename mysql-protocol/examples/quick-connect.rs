@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let client = TcpStream::connect(addr).await?;
-    let mut conn = Connection::new(client);
+    let mut conn = Connection::new(client, None);
     conn.connect().await?;
 
     println!("Connected: {:?}", conn);

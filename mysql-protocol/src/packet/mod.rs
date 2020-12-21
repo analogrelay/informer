@@ -3,39 +3,12 @@ use crate::error::{Error, ErrorKind};
 use bytes::Bytes;
 use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
 
-pub use handshake::Handshake;
+pub use handshake::{Handshake, HandshakeResponse};
 
 mod handshake;
 
 pub trait Packet: Sized {
     fn read<R: std::io::BufRead>(reader: &mut R) -> Result<Self, Error>;
-
-    /// Attempts to read the packet out of the provided `Buf`.
-    ///
-    /// If `Ok` is returned, the buffer will have been advanced past the packet.
-    /// If `Err` is returned, the buffer will **not** have been advanced at all.
-    fn try_read<B: bytes::Buf>(buf: &mut B) -> Result<Self, Error> {
-        if buf.remaining() < 4 {
-            return Err(Error::new(ErrorKind::DataIncomplete, "insufficient data to read packet header"));
-        }
-
-        let header = &buf.bytes()[0..4];
-        let payload_len =
-            (header[0] as usize) | ((header[1] as usize) << 8) | ((header[2] as usize) << 16);
-
-        if buf.remaining() < 4 + payload_len {
-            return Err(Error::new(ErrorKind::DataIncomplete, "insufficient data to read packet"));
-        }
-
-        match Self::read(&mut &buf.bytes()[4..(4 + payload_len)]) {
-            Ok(p) => {
-                buf.advance(4 + payload_len);
-                Ok(p)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     fn write<W: std::io::Write>(&self, w: &mut W) -> Result<(), Error>;
     fn size_hint(&self) -> Option<usize> { None }
 }
@@ -130,25 +103,6 @@ mod tests {
     use super::{Packet, read_lenenc_int, write_lenenc_int};
 
     #[test]
-    pub fn try_parse_returns_incomplete_if_insufficient_space_in_provided_buffer() {
-        let mut data = Bytes::from_static(&[]);
-        assert_eq!(ErrorKind::DataIncomplete, Bytes::try_read(&mut data).unwrap_err().kind());
-        let mut data = Bytes::from_static(&[0, 0]);
-        assert_eq!(ErrorKind::DataIncomplete, Bytes::try_read(&mut data).unwrap_err().kind());
-        let mut data = Bytes::from_static(&[4, 0, 0, 0, 0, 0]);
-        assert_eq!(ErrorKind::DataIncomplete, Bytes::try_read(&mut data).unwrap_err().kind());
-    }
-
-    #[test]
-    pub fn try_parse_returns_result_of_parsing_if_sufficient_space_in_buffer() {
-        let mut data = Bytes::from_static(&[4, 0, 0, 0, 1, 2, 3, 4]);
-        assert_eq!(vec![1u8, 2u8, 3u8, 4u8], Bytes::try_read(&mut data).unwrap());
-
-        let mut data = Bytes::from_static(&[4, 0, 0, 0, 1, 2, 3, 4]);
-        assert!(FailToParse::try_read(&mut data).is_err())
-    }
-
-    #[test]
     pub fn can_read_and_write_lenenc_ints() {
         fn rw_test(val: u64, mut bytes: &'static [u8]) {
             let mut write: Vec<u8> = Vec::new();
@@ -164,17 +118,5 @@ mod tests {
         rw_test(0xBEEFCA,&[0xFD, 0xCA, 0xEF, 0xBE]);
         rw_test(0xBEEFCAFE,&[0xFE, 0xFE, 0xCA, 0xEF, 0xBE, 0, 0, 0, 0]);
         rw_test(0xBEEFCAFEBEEFCAFE,&[0xFE, 0xFE, 0xCA, 0xEF, 0xBE, 0xFE, 0xCA, 0xEF, 0xBE]);
-    }
-
-    struct FailToParse;
-
-    impl Packet for FailToParse {
-        fn read<R: std::io::Read>(_: &mut R) -> Result<FailToParse, Error> {
-            Err(Error::new( ErrorKind::Other, "it's bad"))
-        }
-
-        fn write<W: std::io::Write>(&self, w: &mut W) -> Result<(), Error> {
-            Err(Error::new( ErrorKind::Other, "it's bad"))
-        }
     }
 }
