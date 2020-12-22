@@ -1,9 +1,10 @@
-use std::{fmt::Debug, todo};
+use std::fmt::Debug;
 
 use crate::{error::{Error, ErrorKind}, packet::Packet};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes, BytesMut};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
+use mysql_common::constants::CapabilityFlags;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const BUFFER_SIZE: usize = 4096;
 
@@ -11,7 +12,8 @@ pub struct Transport<S: AsyncRead + AsyncWrite + Unpin> {
     stream: S,
     buffer: BytesMut,
     packet: Option<Bytes>,
-    sequence_id: u8
+    sequence_id: u8,
+    capabilities: CapabilityFlags,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> Debug for Transport<S> {
@@ -26,7 +28,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Transport<S> {
             stream: stream,
             buffer: BytesMut::with_capacity(BUFFER_SIZE),
             packet: None,
-            sequence_id: 0
+            sequence_id: 0,
+            capabilities: CapabilityFlags::from_bits_truncate(0)
         }
     }
 
@@ -46,9 +49,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Transport<S> {
 
     /// Waits for the next packet, reads it into the provided structure, and advances the buffer
     pub async fn read_packet<P: Packet>(&mut self) -> Result<Option<P>, Error> {
-        if let Some(packet) = self.fill_packet_buffer().await? {
+        if let Some(mut packet) = self.fill_packet_buffer().await? {
             self.next_packet();
-            Ok(Some(P::read(&mut packet.reader())?))
+            Ok(Some(P::read(&mut packet, self.capabilities)?))
         } else {
             Ok(None)
         }
@@ -60,7 +63,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Transport<S> {
         } else {
             Vec::new()
         };
-        packet.write(&mut output)?;
+        packet.write(&mut output, self.capabilities)?;
 
         let mut header = [0u8; 4];
         LittleEndian::write_uint(&mut header[0..3], output.len() as u64, 3);
@@ -70,6 +73,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Transport<S> {
         self.stream.write_all(&header).await?;
         self.stream.write_all(&output).await?;
         Ok(())
+    }
+
+    pub fn set_capabilities(&mut self, capabilities: CapabilityFlags) {
+        self.capabilities = capabilities;
     }
 
     fn next_sequence_id(&mut self) -> u8 {
@@ -115,7 +122,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Transport<S> {
             }
             let header = &self.buffer.bytes()[0..4];
             let payload_len = LittleEndian::read_uint(&header[0..3], 3) as usize;
-            self.check_sequence_id(header[3])?;
+            let recieved_sequence_id = header[3];
+            self.check_sequence_id(recieved_sequence_id)?;
 
             self.packet = if self.buffer.remaining() < 4 + payload_len {
                 None

@@ -68,6 +68,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         self.state.status_flags = handshake.status_flags;
         self.state.server_version = handshake.server_version;
 
+        self.transport.set_capabilities(self.state.capability_flags);
+
         // Generate auth data
         let auth_plugin = AuthPlugin::from_name(handshake.auth_plugin_name);
         if let AuthPlugin::Unknown(ref s) = auth_plugin {
@@ -92,8 +94,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         self.transport.write_packet(response).await?;
 
         // Read a possible response (just the bytes for now)
-        let response = self.transport.read_packet::<Bytes>().await?;
-        println!("handshake response response: {:?}", response);
 
         Ok(())
     }
@@ -103,7 +103,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
     }
 
     fn get_client_caps(&self) -> CapabilityFlags {
-        let mut base_flags: CapabilityFlags = CapabilityFlags::CLIENT_PROTOCOL_41
+        let base_flags: CapabilityFlags = CapabilityFlags::CLIENT_PROTOCOL_41
             | CapabilityFlags::CLIENT_SECURE_CONNECTION
             | CapabilityFlags::CLIENT_LONG_PASSWORD
             | CapabilityFlags::CLIENT_TRANSACTIONS

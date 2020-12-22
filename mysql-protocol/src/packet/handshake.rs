@@ -1,11 +1,12 @@
-use std::{borrow::Cow, cmp::max, i8::MAX, todo};
+use std::{cmp::max, io::Write};
 
 use byteorder::{LittleEndian as LE, ReadBytesExt, WriteBytesExt};
+use bytes::{Buf, BufMut};
 use mysql_common::constants::{CapabilityFlags, StatusFlags};
 
 use crate::error::{Error, ErrorKind};
 
-use super::{Packet, read_bytes, read_string, write_lenenc_int, write_string};
+use super::{Packet, utils::*};
 
 #[derive(Debug)]
 pub struct Handshake {
@@ -20,11 +21,13 @@ pub struct Handshake {
 }
 
 impl Packet for Handshake {
-    fn read<R: std::io::BufRead>(reader: &mut R) -> Result<Handshake, Error> {
+    fn read(buf: &mut impl Buf, _: CapabilityFlags) -> Result<Handshake, Error> {
+        let mut reader = buf.reader();
+
         let protocol_version = reader.read_u8()?;
-        let server_version = read_string(reader, false)?;
+        let server_version = reader.read_string(false)?;
         let connection_id = reader.read_u32::<LE>()?;
-        let mut auth_plugin_data = read_bytes(reader, 8)?;
+        let mut auth_plugin_data = reader.read_bytes(8)?;
         // skip the filler
         reader.read_u8()?;
         let mut capability_flags = CapabilityFlags::from_bits_truncate(reader.read_u16::<LE>()? as u32);
@@ -33,14 +36,14 @@ impl Packet for Handshake {
         capability_flags |= CapabilityFlags::from_bits_truncate((reader.read_u16::<LE>()? as u32) << 16);
         let auth_data_len = reader.read_u8()?;
 
-        read_bytes(reader, 10)?;
+        reader.read_bytes(10)?;
         if capability_flags.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
             let additional_data_len = max(12, auth_data_len - 9);
-            let additional_data = read_bytes(reader, additional_data_len as usize)?;
+            let additional_data = reader.read_bytes(additional_data_len as usize)?;
             auth_plugin_data.extend_from_slice(additional_data.as_slice());
             reader.read_u8()?;
         }
-        let auth_plugin_name = read_string(reader, true)?;
+        let auth_plugin_name = reader.read_string(true)?;
         Ok(Handshake {
             protocol_version,
             server_version,
@@ -53,10 +56,11 @@ impl Packet for Handshake {
         })
     }
 
-    fn write<W: std::io::Write>(&self, _: &mut W) -> Result<(), Error> {
+    fn write(&self, buf: &mut impl bytes::BufMut, capabilities: CapabilityFlags) -> Result<(), Error> {
         Err(Error::new(
             ErrorKind::NotSupported,
             "writing handshake packets"))
+
     }
 }
 
@@ -72,67 +76,64 @@ pub struct HandshakeResponse {
 }
 
 impl Packet for HandshakeResponse {
-    fn read<R: std::io::BufRead>(_: &mut R) -> Result<Self, Error> {
-        Err(Error::new(
-            ErrorKind::NotSupported,
-            "reading handshake response packets"))
-    }
+    fn write(&self, buf: &mut impl BufMut, _: CapabilityFlags) -> Result<(), Error> {
+        let mut writer = buf.writer();
 
-    fn write<W: std::io::Write>(&self, w: &mut W) -> Result<(), Error> {
         let cap_flags = if let Some(_) = self.initial_database {
             self.capability_flags | CapabilityFlags::CLIENT_CONNECT_WITH_DB
         } else {
             self.capability_flags
         };
 
-        w.write_u32::<LE>(cap_flags.bits())?;
-        w.write_u32::<LE>(self.max_packet_size)?;
-        w.write_u8(self.character_set)?;
-        w.write_all(&[0u8; 23])?;
-        write_string(w, self.username.as_ref())?;
+        writer.write_u32::<LE>(cap_flags.bits())?;
+        writer.write_u32::<LE>(self.max_packet_size)?;
+        writer.write_u8(self.character_set)?;
+        writer.write_all(&[0u8; 23])?;
+        writer.write_string(self.username.as_ref())?;
 
         if self.capability_flags.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
-            write_lenenc_int(w, self.auth_response.len() as u64)?;
-            w.write_all(&self.auth_response)?;
+            writer.write_lenenc_bytes(&self.auth_response)?;
         } else if self.capability_flags.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
             if self.auth_response.len() > u8::MAX as usize {
                 return Err(Error::new(
                     ErrorKind::InvalidPacket,
                     format!("cannot encode auth response of length {} unless CLIENT_PLUGIN_AUTHN_LENENC_CLIENT_DATA is set", self.auth_response.len())))
             }
-            w.write_u8(self.auth_response.len() as u8)?;
-            w.write_all(&self.auth_response)?;
+            writer.write_u8(self.auth_response.len() as u8)?;
+            writer.write_all(&self.auth_response)?;
         } else {
-            w.write_all(&self.auth_response)?;
-            w.write_u8(0)?;
+            writer.write_all(&self.auth_response)?;
+            writer.write_u8(0)?;
         }
 
         if let Some(s) = &self.initial_database {
-            write_string(w, s.as_ref())?;
+            writer.write_string(s.as_ref())?;
         }
 
         if cap_flags.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH) {
-            write_string(w, self.auth_plugin_name.as_ref())?;
+            writer.write_string(self.auth_plugin_name.as_ref())?;
         }
 
         if cap_flags.contains(CapabilityFlags::CLIENT_CONNECT_ATTRS) {
-            write_lenenc_int(w, self.attributes.len() as u64)?;
+            writer.write_lenenc_int(self.attributes.len() as u64)?;
             for (key, val) in &self.attributes {
-                let key = key.as_bytes();
-                let val = val.as_bytes();
-                write_lenenc_int(w, key.len() as u64)?;
-                w.write_all(key)?;
-                write_lenenc_int(w, val.len() as u64)?;
-                w.write_all(val)?;
+                writer.write_lenenc_string(key)?;
+                writer.write_lenenc_string(val)?;
             }
         }
         Ok(())
+    }
+
+    fn read(_: &mut impl Buf, _: CapabilityFlags) -> Result<Self, Error> {
+        Err(Error::new(
+            ErrorKind::NotSupported,
+            "reading handshake response packets"))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use bytes::Bytes;
     use mysql_common::constants::{CapabilityFlags, StatusFlags};
     use crate::packet::Packet;
     use super::{Handshake, HandshakeResponse};
@@ -146,7 +147,9 @@ mod tests {
 
     #[test]
     pub fn parse_can_parse_handshake_packets() {
-        let handshake = Handshake::read(&mut Cursor::new(&HANDSHAKE_PACKET)).unwrap();
+        let handshake = Handshake::read(
+            &mut Bytes::from_static(&HANDSHAKE_PACKET),
+            CapabilityFlags::from_bits_truncate(0)).unwrap();
         let expected_flags =
             CapabilityFlags::CLIENT_LONG_PASSWORD | CapabilityFlags::CLIENT_FOUND_ROWS | CapabilityFlags::CLIENT_LONG_FLAG |
             CapabilityFlags::CLIENT_CONNECT_WITH_DB | CapabilityFlags::CLIENT_NO_SCHEMA | CapabilityFlags::CLIENT_COMPRESS |
@@ -223,7 +226,7 @@ mod tests {
 
     fn write_to_vec<P: Packet>(packet: P) -> Vec<u8> {
         let mut v: Vec<u8> = Vec::new();
-        packet.write(&mut v).unwrap();
+        packet.write(&mut v, CapabilityFlags::from_bits_truncate(0)).unwrap();
         v
     }
 }
