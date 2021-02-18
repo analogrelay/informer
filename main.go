@@ -1,6 +1,6 @@
 package main
 
-import "github.com/anurse/informer/internal/cmd"
+import "github.com/anurse/informer/cmd"
 
 func main() {
 	cmd.Execute()

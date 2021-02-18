@@ -2,5 +2,7 @@
 root="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." >/dev/null 2>&1 && pwd )"
 cd "$root"
 
+set -euo pipefail
+
 script/build
 bin/informer "$@"

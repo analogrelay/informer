@@ -1,0 +1,19 @@
+services:
+  mysql-nogtid:
+    image: mysql
+    ports:
+      - "23306:3306"
+    volumes:
+      - ./config/mysql-nogtid:/etc/mysql/conf.d
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_ROOT_HOST: "%"
+  mysql-gtid:
+    image: mysql
+    ports:
+      - "23307:3306"
+    volumes:
+      - ./config/mysql-gtid:/etc/mysql/conf.d
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_ROOT_HOST: "%"
