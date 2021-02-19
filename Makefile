@@ -1,10 +1,10 @@
-ENTRYPOINT="main.go"
-
 .PHONY: all
-all: informer
+all: build
 
-bin:
-	mkdir -p bin
+.PHONY: build
+build:
+	dotnet build informer.sln
 
-informer: bin
-	go build -o bin/informer $(ENTRYPOINT)
+.PHONY: test
+test:
+	dotnet test informer.sln

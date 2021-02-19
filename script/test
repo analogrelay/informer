@@ -4,4 +4,4 @@ cd "$root"
 
 set -euo pipefail
 
-dotnet run --project "$root/src/informer" -- "$@"
+make test
